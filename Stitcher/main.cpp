@@ -5,19 +5,15 @@
 
 #include "loftr.h"
 
-#include "types.h"
+#include "types.hpp"
 
 bool getOverlapRectangle(const cv::Rect2i& rect1, const cv::Rect2i& rect2, cv::Rect2i& overlap) {
     int x1 = std::max(rect1.x, rect2.x);
     int y1 = std::max(rect1.y, rect2.y);
     int x2 = std::min(rect1.x + rect1.width, rect2.x + rect2.width);
     int y2 = std::min(rect1.y + rect1.height, rect2.y + rect2.height);
-
-    if (x2 <= x1 || y2 <= y1) {
-        // No overlap
+    if (x2 <= x1 || y2 <= y1)
         return false;
-    }
-
     overlap = cv::Rect2i(x1, y1, x2 - x1, y2 - y1);
     return true;
 }
@@ -81,18 +77,13 @@ std::vector<std::pair<cv::Mat, cv::Rect2i>> getImagesRects(std::string path) {
 
 cv::Point2f warpPoint(const cv::Point2f& point, const cv::Mat& transform)
 {
-    cv::Mat pointMat(3, 1, CV_64FC1);  // Homogeneous coordinate of input point
+    cv::Mat pointMat(3, 1, CV_64FC1);
     pointMat.at<double>(0, 0) = point.x;
     pointMat.at<double>(1, 0) = point.y;
     pointMat.at<double>(2, 0) = 1.0;
-
-    // Apply the affine transform to the point
     cv::Mat warpedPoint = transform * pointMat;
-
-    // Retrieve the warped point coordinates
     float warpedX = warpedPoint.at<double>(0, 0);
     float warpedY = warpedPoint.at<double>(1, 0);
-
     return cv::Point2f(warpedX, warpedY);
 }
 
@@ -127,7 +118,9 @@ cv::Mat composeImages(const std::vector<std::pair<cv::Mat, cv::Rect2i>>& images,
         t.at<double>(0, 2) -= minX;
         t.at<double>(1, 2) -= minY;
 
-        cv::Mat layer = cv::Mat(images[i].first.rows, images[i].first.cols, CV_8UC1, cv::Scalar(1));
+        cv::Mat layer; cv::cvtColor(images[i].first, layer, cv::COLOR_BGR2GRAY);
+        layer *= 1000000;
+        layer /= 255;
         cv::Mat warpedLayer;
         cv::warpAffine(layer, warpedLayer, t, maskCanvas.size());
         cv::add(warpedLayer, maskCanvas, maskCanvas);
@@ -144,11 +137,13 @@ cv::Mat composeImages(const std::vector<std::pair<cv::Mat, cv::Rect2i>>& images,
         for (int x = 0; x < warpedImage.cols; ++x) {
             for (int y = 0; y < warpedImage.rows; ++y) {
                 auto rgb = warpedImage.at<cv::Vec3b>(y, x);
-                float coeff = 1.0f / float(maskCanvas.at<uchar>(y, x));
-                uchar r = floor(float(rgb[0]) * coeff);
-                uchar g = floor(float(rgb[1]) * coeff);
-                uchar b = floor(float(rgb[2]) * coeff);
-                canvas.at<cv::Vec3b>(y, x) += cv::Vec3b(r, g, b);
+                if (rgb[0] > 0 || rgb[1] > 0 || rgb[2] > 0) {
+                    float coeff = 1.0f / float(maskCanvas.at<uchar>(y, x));
+                    uchar r = floor(float(rgb[0]) * coeff);
+                    uchar g = floor(float(rgb[1]) * coeff);
+                    uchar b = floor(float(rgb[2]) * coeff);
+                    canvas.at<cv::Vec3b>(y, x) += cv::Vec3b(r, g, b);
+                }
             }
         }
         cv::imshow("c", canvas);
@@ -162,12 +157,15 @@ int main() {
 
     LOFTR loftr;
 
-    //auto imrecs = getImagesRects("C:/cool/dioram/yandex/facades/butman2/walls/3");
-    //auto imrecs = getImagesRects("test");
     auto imrecs = getImagesRects("test4");
 
+    Graph g;
     std::map<int, std::map<int, OverlapTransform>> ots;
     std::vector<cv::Mat> absTs(imrecs.size(), cv::Mat());
+
+    for (int i = 0; i < imrecs.size(); ++i) {
+        boost::add_vertex({ i }, g);
+    }
 
     for (int i = 0; i < imrecs.size(); ++i) {
         auto img1 = imrecs[i].first;
@@ -188,7 +186,11 @@ int main() {
                 cv::rectangle(msk2, mskrect2, cv::Scalar(255), -1);
                 
                 std::vector<cv::Point2f> kpts1, kpts2;
-                loftr.match(img1, img2, msk1, msk2, kpts1, kpts2);
+                loftr.match(img1(mskrect1), img2(mskrect2), cv::Mat(), cv::Mat(), kpts1, kpts2);
+                for (auto& kpt : kpts1)
+                    kpt += cv::Point2f(overlap.x - rct1.x, overlap.y - rct1.y);
+                for (auto& kpt : kpts2)
+                    kpt += cv::Point2f(overlap.x - rct2.x, overlap.y - rct2.y);
 
                 if (kpts1.size()) {
                     //std::vector<cv::KeyPoint> kpts1_, kpts2_;
@@ -213,6 +215,7 @@ int main() {
 
                     ots[i][j] = { kpts1, kpts2, i, j, ninlers, base };
                     ots[j][i] = { kpts2, kpts1, j, i, ninlers, base.inv() };
+                    boost::add_edge(i, j, {ninlers}, g);
                 }
             }
         }
@@ -223,6 +226,11 @@ int main() {
         }
     }
 
+    std::ofstream dot("graph.dot");
+    boost::write_graphviz(dot, g,
+        boost::make_label_writer(boost::get(&vert_info::idx, g)),
+        make_edge_writer(boost::get(&edge_info::nInliers, g), boost::get(&edge_info::nInliers, g)));
+
     bool allAbsTfound = false;
     bool added = true;
     while (!allAbsTfound && added)
@@ -231,6 +239,7 @@ int main() {
         std::vector<int> maxIForJ_idx(absTs.size(), -1);
         std::vector<int> scndMaxIForJ(absTs.size(), -1);
         std::vector<int> scndMaxIForJ_idx(absTs.size(), -1);
+        int bestJ = -1, bestJ_idx1 = -1, bestJ_idx2 = -1;
         for (int i = 0; i < absTs.size(); ++i) {
             for (int j = 0; j < absTs.size(); ++j) {
                 if (absTs[j].empty() && ots.count(i) && ots[i].count(j)) {
@@ -238,9 +247,16 @@ int main() {
                         maxIForJ[j] = ots[i][j].nInlers;
                         maxIForJ_idx[j] = i;
                     }
-                    if (!absTs[i].empty() && ots[i][j].nInlers > scndMaxIForJ[j]) {
-                        scndMaxIForJ[j] = ots[i][j].nInlers;
-                        scndMaxIForJ_idx[j] = i;
+                    if (!absTs[i].empty()) {
+                        if (ots[i][j].nInlers > scndMaxIForJ[j]) {
+                            scndMaxIForJ[j] = ots[i][j].nInlers;
+                            scndMaxIForJ_idx[j] = i;
+                        }
+                        if (ots[i][j].nInlers > bestJ) {
+                            bestJ = ots[i][j].nInlers;
+                            bestJ_idx1 = i;
+                            bestJ_idx2 = j;
+                        }
                     }
                 }
             }
@@ -253,17 +269,16 @@ int main() {
                 if (!absTs[maxIForJ_idx[i]].empty()) {
                     absTs[i] = absTs[maxIForJ_idx[i]] * ots[maxIForJ_idx[i]][i].relT;
                     added = true;
-                } else if (i == maxIForJ_idx[maxIForJ_idx[i]] && scndMaxIForJ_idx[i] > -1) {
-                    absTs[i] = absTs[scndMaxIForJ_idx[i]] * ots[scndMaxIForJ_idx[i]][i].relT;
-                    maxIForJ_idx[i] = -1;
-                    added = true;
-                    allAbsTfound = false;
-                    break;
-                }                
+                }           
             }
             if (absTs[i].empty()) {
                 allAbsTfound = false;
             }
+        }
+
+        if (!added && bestJ > -1) {
+            absTs[bestJ_idx2] = absTs[bestJ_idx1] * ots[bestJ_idx1][bestJ_idx2].relT;
+            added = true;
         }
     }
 
