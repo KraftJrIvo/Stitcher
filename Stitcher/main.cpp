@@ -1,3 +1,5 @@
+#define NOMINMAX
+
 #include <vector>
 #include <iostream>
 #include <opencv2/opencv.hpp>
@@ -6,6 +8,7 @@
 #include "loftr.h"
 
 #include "types.hpp"
+#include "opt.hpp"
 
 bool getOverlapRectangle(const cv::Rect2i& rect1, const cv::Rect2i& rect2, cv::Rect2i& overlap) {
     int x1 = std::max(rect1.x, rect2.x);
@@ -87,6 +90,17 @@ cv::Point2f warpPoint(const cv::Point2f& point, const cv::Mat& transform)
     return cv::Point2f(warpedX, warpedY);
 }
 
+cv::Mat drawMatches(cv::Mat img1, cv::Mat img2, const std::vector<cv::Point2f>& pts1, const std::vector<cv::Point2f>& pts2, const cv::Rect2i& mskrect1, const cv::Rect2i& mskrect2, const std::vector<uchar>& inliers) {
+    std::vector<cv::Mat> imgs = { img1, img2 };
+    cv::Mat img; cv::vconcat(imgs, img);
+    cv::Point2f offset1 = { float(-mskrect1.x), float(-mskrect1.y) };
+    cv::Point2f offset2 = { float(-mskrect2.x), float(img1.rows - mskrect2.y) };
+    for (int i = 0; i < pts1.size(); ++i)
+        if (inliers[i])
+            cv::line(img, pts1[i] + offset1, pts2[i] + offset2, cv::Scalar(255, 255, 255));
+    return img;
+}
+
 cv::Mat composeImages(const std::vector<std::pair<cv::Mat, cv::Rect2i>>& images, const std::vector<cv::Mat>& transforms)
 {
     // Find the maximum width and height among all images
@@ -99,6 +113,7 @@ cv::Mat composeImages(const std::vector<std::pair<cv::Mat, cv::Rect2i>>& images,
     for (int i = 0; i < images.size(); ++i) {
         if (transforms[i].empty()) continue;
         auto t = transforms[i];
+        std::cout << t << std::endl;
         auto p1 = warpPoint(cv::Point2f(images[i].second.x, images[i].second.y), t);
         auto p2 = warpPoint(cv::Point2f(images[i].second.x + images[i].second.width, images[i].second.y), t);
         auto p3 = warpPoint(cv::Point2f(images[i].second.x, images[i].second.y + images[i].second.height), t);
@@ -146,8 +161,8 @@ cv::Mat composeImages(const std::vector<std::pair<cv::Mat, cv::Rect2i>>& images,
                 }
             }
         }
-        cv::imshow("c", canvas);
-        cv::waitKey();
+        //cv::imshow("c", canvas);
+        //cv::waitKey();
     }
 
     return canvas;
@@ -169,60 +184,56 @@ int main() {
 
     for (int i = 0; i < imrecs.size(); ++i) {
         auto img1 = imrecs[i].first;
-        auto rct1 = imrecs[i].second;
+        auto rect1 = imrecs[i].second;
         for (int j = i + 1; j < imrecs.size(); ++j) {
             auto img2 = imrecs[j].first;
-            auto rct2 = imrecs[j].second;
+            auto rect2 = imrecs[j].second;
             
             cv::Rect2i overlap;
-            bool overlaps = getOverlapRectangle(rct1, rct2, overlap);
+            bool overlaps = getOverlapRectangle(rect1, rect2, overlap);
             if (overlaps) {
-                std::cout << i << " " << j << " | " << rct1.x << " " << rct1.y << " " << rct1.width << " " << rct1.height << " | " << rct2.x << " " << rct2.y << " " << rct2.width << " " << rct2.height << " | " << overlap.area() << std::endl;
-                auto mskrect1 = cv::Rect2i(overlap.x - rct1.x, overlap.y - rct1.y, overlap.width, overlap.height);
+                std::cout << i << " " << j << " | " << rect1.x << " " << rect1.y << " " << rect1.width << " " << rect1.height << " | " << rect2.x << " " << rect2.y << " " << rect2.width << " " << rect2.height << " | " << overlap.area() << std::endl;
+                auto mskrect1 = cv::Rect2i(overlap.x - rect1.x, overlap.y - rect1.y, overlap.width, overlap.height);
                 cv::Mat msk1 = cv::Mat(img1.rows, img1.cols, CV_8UC1, cv::Scalar(0));
                 cv::rectangle(msk1, mskrect1, cv::Scalar(255), -1);
-                auto mskrect2 = cv::Rect2i(overlap.x - rct2.x, overlap.y - rct2.y, overlap.width, overlap.height);
+                auto mskrect2 = cv::Rect2i(overlap.x - rect2.x, overlap.y - rect2.y, overlap.width, overlap.height);
                 cv::Mat msk2 = cv::Mat(img2.rows, img2.cols, CV_8UC1, cv::Scalar(0));
                 cv::rectangle(msk2, mskrect2, cv::Scalar(255), -1);
                 
                 std::vector<cv::Point2f> kpts1, kpts2;
                 loftr.match(img1(mskrect1), img2(mskrect2), cv::Mat(), cv::Mat(), kpts1, kpts2);
                 for (auto& kpt : kpts1)
-                    kpt += cv::Point2f(overlap.x - rct1.x, overlap.y - rct1.y);
+                    kpt += cv::Point2f(overlap.x - rect1.x, overlap.y - rect1.y);
                 for (auto& kpt : kpts2)
-                    kpt += cv::Point2f(overlap.x - rct2.x, overlap.y - rct2.y);
+                    kpt += cv::Point2f(overlap.x - rect2.x, overlap.y - rect2.y);
 
                 if (kpts1.size()) {
-                    //std::vector<cv::KeyPoint> kpts1_, kpts2_;
-                    //std::vector<std::vector<cv::DMatch>> mtchs(1);
-                    //for (int i = 0; i < kpts1.size(); ++i) {
-                    //    kpts1_.push_back(cv::KeyPoint(kpts1[i], 2));
-                    //    mtchs[0].push_back(cv::DMatch(i, i, 0.0f));
-                    //}
-                    //for (auto& pt : kpts2)
-                    //    kpts2_.push_back(cv::KeyPoint(pt, 2));
-                    //cv::Mat out; cv::drawMatches(img1, kpts1_, img2, kpts2_, mtchs, out);
-                    //cv::imshow("m1", msk1);
-                    //cv::imshow("m2", msk2);
-                    //cv::imshow("w", out);
-                    //cv::waitKey();
 
                     std::vector<uchar> inliers;
-                    cv::Mat T = cv::estimateAffinePartial2D(kpts2, kpts1, inliers);
-                    cv::Mat base = cv::Mat::eye(3, 3, CV_64F);
-                    T.copyTo(base({ 0, 0, 3, 2 }));
+                    cv::Mat T = cv::estimateAffinePartial2D(kpts2, kpts1, inliers, 8, 50.0);
+                    //cv::Mat T = cv::estimateAffine2D(kpts2, kpts1, inliers);
                     int ninlers = std::count(inliers.begin(), inliers.end(), 1);
 
-                    ots[i][j] = { kpts1, kpts2, i, j, ninlers, base };
-                    ots[j][i] = { kpts2, kpts1, j, i, ninlers, base.inv() };
-                    boost::add_edge(i, j, {ninlers}, g);
+                    //if (i == 5 || j == 5) {
+                    //    cv::Mat out = drawMatches(img1(mskrect1), img2(mskrect2), kpts1, kpts2, mskrect1, mskrect2, inliers);
+                    //    cv::imshow("m", out);
+                    //    cv::waitKey();
+                    //}
+
+                    if (ninlers >= 150) {
+                        cv::Mat base = cv::Mat::eye(3, 3, CV_64F);
+                        T.copyTo(base({ 0, 0, 3, 2 }));
+                        ots[i][j] = { kpts1, kpts2, inliers, i, j, ninlers, base };
+                        ots[j][i] = { kpts2, kpts1, inliers, j, i, ninlers, base.inv() };
+                        boost::add_edge(i, j, { ninlers }, g);
+                    }
                 }
             }
         }
         if (i == 0) {
             absTs[i] = cv::Mat::eye(3, 3, CV_64F);
-            absTs[i].at<double>(0, 2) = rct1.x;
-            absTs[i].at<double>(1, 2) = rct1.y;
+            absTs[i].at<double>(0, 2) = rect1.x;
+            absTs[i].at<double>(1, 2) = rect1.y;
         }
     }
 
@@ -283,8 +294,17 @@ int main() {
     }
 
     auto composed = composeImages(imrecs, absTs);
-    cv::imshow("w", composed);
-    cv::waitKey();
+    cv::imwrite("res1.png", composed);
+
+    std::vector<cv::Mat> absTs2(imrecs.size(), cv::Mat());
+    optimize1(ots, absTs, absTs2);
+    composed = composeImages(imrecs, absTs2);
+    cv::imwrite("res2.png", composed);
+
+    std::vector<cv::Mat> absTs3(imrecs.size(), cv::Mat());
+    optimize2(ots, absTs, absTs3);
+    composed = composeImages(imrecs, absTs3);
+    cv::imwrite("res3.png", composed);
 
 	return 0;
 }

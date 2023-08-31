@@ -1,5 +1,7 @@
 #pragma once
 
+#define CERES_MSVC_USE_UNDERSCORE_PREFIXED_BESSEL_FUNCTIONS
+
 #include <opencv2/opencv.hpp>
 
 #include <boost/graph/graphviz.hpp>
@@ -7,6 +9,7 @@
 
 struct OverlapTransform {
 	std::vector<cv::Point2f> pts1, pts2;
+	std::vector<uchar> inliers;
 	int parent, child, nInlers;
 	cv::Mat relT;
 };
