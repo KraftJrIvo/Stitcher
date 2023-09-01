@@ -5,6 +5,7 @@
 
 #include <ceres/ceres.h>
 
+cv::Mat composeAffine(const Eigen::Matrix<double, 6, 1>& vals);
 void optimize1(const std::map<int, std::map<int, OverlapTransform>>& ots, const std::vector<cv::Mat>& Tin, std::vector<cv::Mat>& Tout, int until = -1);
 void optimize2(const std::map<int, std::map<int, OverlapTransform>>& ots, const std::vector<cv::Mat>& Tin, std::vector<cv::Mat>& Tout, int until = -1);
 
@@ -63,7 +64,7 @@ public:
 			if (i < 2) residuals[i] /= (T)1000.0;
 			if (i >= 3) residuals[i] *= (T)10.0;
 		}
-		residuals[6] = (T)0;// t1[2] + t2[2];
+		residuals[6] = t1[2] + t2[2];
 
         return true;
     }
@@ -77,7 +78,7 @@ public:
 	PointCost(const Eigen::Vector2d& pt1, const Eigen::Vector2d& pt2) : pt1(pt1), pt2(pt2) { }
 
 	static ceres::CostFunction* Create(const Eigen::Vector2d& pt1, const Eigen::Vector2d& pt2) {
-		return (new ceres::AutoDiffCostFunction<PointCost, 2, 6, 6>(new PointCost(pt1, pt2)));
+		return (new ceres::AutoDiffCostFunction<PointCost, 3, 6, 6>(new PointCost(pt1, pt2)));
 	}
 
 	template <typename T>
@@ -124,6 +125,7 @@ public:
 
 		residuals[0] = wpt1.x() - wpt2.x();
 		residuals[1] = wpt1.y() - wpt2.y();
+		residuals[2] = (t1[2] + t2[2]) * (T)100.0;
 
 		return true;
 	}

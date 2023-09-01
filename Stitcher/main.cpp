@@ -58,12 +58,17 @@ std::vector<std::pair<cv::Mat, cv::Rect2i>> getImagesRects(std::string path) {
         if (entry.is_regular_file()) {
             std::string filePath = entry.path().string();
             cv::Mat img = cv::imread(filePath, cv::IMREAD_COLOR);
+            if (path.find("test5") != std::string::npos)
+                cv::resize(img, img, {img.cols / 4, img.rows / 4});
             auto split = splitString(filePath, "\\/._");
             int x = std::stoi(split[split.size() - 3]);
             int y = std::stoi(split[split.size() - 2]);
             minX = std::min(minX, x);
             minY = std::min(minY, y);
             cv::Rect2i rect = { x, y, img.cols, img.rows };
+            if (path.find("test5") != std::string::npos) {
+                rect.x /= 4; rect.y /= 4;
+            }
 
             if (!img.empty()) {
                 res.push_back({ img, rect });
@@ -96,12 +101,11 @@ cv::Mat drawMatches(cv::Mat img1, cv::Mat img2, const std::vector<cv::Point2f>& 
     cv::Point2f offset1 = { float(-mskrect1.x), float(-mskrect1.y) };
     cv::Point2f offset2 = { float(-mskrect2.x), float(img1.rows - mskrect2.y) };
     for (int i = 0; i < pts1.size(); ++i)
-        if (inliers[i])
-            cv::line(img, pts1[i] + offset1, pts2[i] + offset2, cv::Scalar(255, 255, 255));
+        cv::line(img, pts1[i] + offset1, pts2[i] + offset2, inliers[i] ? CV_RGB(255, 255, 255) : CV_RGB(255, 0, 0));
     return img;
 }
 
-cv::Mat composeImages(const std::vector<std::pair<cv::Mat, cv::Rect2i>>& images, const std::vector<cv::Mat>& transforms)
+cv::Mat composeImages(const std::vector<std::pair<cv::Mat, cv::Rect2i>>& images, const std::vector<cv::Mat>& transforms, bool vis = false)
 {
     // Find the maximum width and height among all images
     int maxWidth = 0;
@@ -161,8 +165,10 @@ cv::Mat composeImages(const std::vector<std::pair<cv::Mat, cv::Rect2i>>& images,
                 }
             }
         }
-        //cv::imshow("c", canvas);
-        //cv::waitKey();
+        if (vis) {
+            cv::imshow("c", canvas);
+            cv::waitKey();
+        }
     }
 
     return canvas;
@@ -172,10 +178,11 @@ int main() {
 
     LOFTR loftr;
 
-    auto imrecs = getImagesRects("test4");
+    auto imrecs = getImagesRects("test5");
 
     Graph g;
     std::map<int, std::map<int, OverlapTransform>> ots;
+    std::vector<cv::Mat> absTs0(imrecs.size(), cv::Mat());
     std::vector<cv::Mat> absTs(imrecs.size(), cv::Mat());
 
     for (int i = 0; i < imrecs.size(); ++i) {
@@ -183,8 +190,14 @@ int main() {
     }
 
     for (int i = 0; i < imrecs.size(); ++i) {
-        auto img1 = imrecs[i].first;
         auto rect1 = imrecs[i].second;
+        
+        Eigen::Matrix<double, 6, 1> t0;
+        t0[0] = rect1.x; t0[1] = rect1.y; t0[2] = 0; 
+        t0[3] = 1.0; t0[4] = 1.0; t0[5] = 0;
+        absTs0[i] = composeAffine(t0);
+        
+        auto img1 = imrecs[i].first;
         for (int j = i + 1; j < imrecs.size(); ++j) {
             auto img2 = imrecs[j].first;
             auto rect2 = imrecs[j].second;
@@ -192,7 +205,6 @@ int main() {
             cv::Rect2i overlap;
             bool overlaps = getOverlapRectangle(rect1, rect2, overlap);
             if (overlaps) {
-                std::cout << i << " " << j << " | " << rect1.x << " " << rect1.y << " " << rect1.width << " " << rect1.height << " | " << rect2.x << " " << rect2.y << " " << rect2.width << " " << rect2.height << " | " << overlap.area() << std::endl;
                 auto mskrect1 = cv::Rect2i(overlap.x - rect1.x, overlap.y - rect1.y, overlap.width, overlap.height);
                 cv::Mat msk1 = cv::Mat(img1.rows, img1.cols, CV_8UC1, cv::Scalar(0));
                 cv::rectangle(msk1, mskrect1, cv::Scalar(255), -1);
@@ -213,14 +225,15 @@ int main() {
                     cv::Mat T = cv::estimateAffinePartial2D(kpts2, kpts1, inliers, 8, 50.0);
                     //cv::Mat T = cv::estimateAffine2D(kpts2, kpts1, inliers);
                     int ninlers = std::count(inliers.begin(), inliers.end(), 1);
+                    std::cout << i << " " << j << " " << ninlers << std::endl;
 
                     //if (i == 5 || j == 5) {
-                    //    cv::Mat out = drawMatches(img1(mskrect1), img2(mskrect2), kpts1, kpts2, mskrect1, mskrect2, inliers);
-                    //    cv::imshow("m", out);
-                    //    cv::waitKey();
+                        cv::Mat out = drawMatches(img1(mskrect1), img2(mskrect2), kpts1, kpts2, mskrect1, mskrect2, inliers);
+                        cv::imshow("m", out);
+                        cv::waitKey();
                     //}
 
-                    if (ninlers >= 150) {
+                    if (ninlers >= 300/* || i == 0*/) {
                         cv::Mat base = cv::Mat::eye(3, 3, CV_64F);
                         T.copyTo(base({ 0, 0, 3, 2 }));
                         ots[i][j] = { kpts1, kpts2, inliers, i, j, ninlers, base };
@@ -293,7 +306,10 @@ int main() {
         }
     }
 
-    auto composed = composeImages(imrecs, absTs);
+    auto composed = composeImages(imrecs, absTs0);
+    cv::imwrite("res0.png", composed);
+
+    composed = composeImages(imrecs, absTs);
     cv::imwrite("res1.png", composed);
 
     std::vector<cv::Mat> absTs2(imrecs.size(), cv::Mat());
@@ -303,7 +319,7 @@ int main() {
 
     std::vector<cv::Mat> absTs3(imrecs.size(), cv::Mat());
     optimize2(ots, absTs, absTs3);
-    composed = composeImages(imrecs, absTs3);
+    composed = composeImages(imrecs, absTs3, true);
     cv::imwrite("res3.png", composed);
 
 	return 0;
