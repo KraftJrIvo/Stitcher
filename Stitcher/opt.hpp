@@ -30,8 +30,8 @@ public:
 		Eigen::Matrix<T, 3, 3> scl = Eigen::Matrix<T, 3, 3>::Identity();
 		scl(0, 0) = sx;
 		scl(1, 1) = sy;
-		Eigen::Matrix<T, 3, 3> T = base * shr * scl;
-		return T;
+		Eigen::Matrix<T, 3, 3> res = base * shr * scl;
+		return res;
 	}
 
 	template <typename T>
@@ -75,10 +75,10 @@ private:
 
 class PointCost {
 public:
-	PointCost(const Eigen::Vector2d& pt1, const Eigen::Vector2d& pt2) : pt1(pt1), pt2(pt2) { }
+	PointCost(const Eigen::Vector2d& pt1, const Eigen::Vector2d& pt2, float weight = 1.0) : pt1(pt1), pt2(pt2), weight(weight) { }
 
-	static ceres::CostFunction* Create(const Eigen::Vector2d& pt1, const Eigen::Vector2d& pt2) {
-		return (new ceres::AutoDiffCostFunction<PointCost, 3, 6, 6>(new PointCost(pt1, pt2)));
+	static ceres::CostFunction* Create(const Eigen::Vector2d& pt1, const Eigen::Vector2d& pt2, float weight = 1.0) {
+		return (new ceres::AutoDiffCostFunction<PointCost, 4, 6, 6>(new PointCost(pt1, pt2, weight)));
 	}
 
 	template <typename T>
@@ -94,8 +94,8 @@ public:
 		Eigen::Matrix<T, 3, 3> scl = Eigen::Matrix<T, 3, 3>::Identity();
 		scl(0, 0) = sx;
 		scl(1, 1) = sy;
-		Eigen::Matrix<T, 3, 3> T = base * shr * scl;
-		return T;
+		Eigen::Matrix<T, 3, 3> res = base * shr * scl;
+		return res;
 	}
 
 	template <typename T>
@@ -123,9 +123,10 @@ public:
 		auto wpt1 = warpPoint(tpt1, T1);
 		auto wpt2 = warpPoint(tpt2, T2);
 
-		residuals[0] = wpt1.x() - wpt2.x();
-		residuals[1] = wpt1.y() - wpt2.y();
-		residuals[2] = (t1[2] + t2[2]) * (T)100.0;
+		residuals[0] = (wpt1.x() - wpt2.x()) * (T)weight;
+		residuals[1] = (wpt1.y() - wpt2.y()) * (T)weight;
+		residuals[2] = ((t1[2] + t2[2]) * (T)100.0) * (T)weight;
+		residuals[3] = ((t1[5] + t2[5]) * (T)10.0) * (T)weight;
 
 		return true;
 	}
@@ -133,4 +134,5 @@ public:
 private:
 	Eigen::Vector2d pt1;
 	Eigen::Vector2d pt2;
+	float weight;
 };

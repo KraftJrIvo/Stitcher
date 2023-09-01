@@ -12,10 +12,12 @@ struct OverlapTransform {
 	std::vector<uchar> inliers;
 	int parent, child, nInlers;
 	cv::Mat relT;
+	bool prioritized;
 };
 
 typedef struct vert_info {
 	int idx;
+	std::string fname;
 };
 typedef struct edge_info {
 	int nInliers;
@@ -36,9 +38,27 @@ private:
 	WeightMap wm;
 	CapacityMap cm;
 };
-
 template <class WeightMap, class CapacityMap>
 inline edge_writer<WeightMap, CapacityMap>
 make_edge_writer(WeightMap w, CapacityMap c) {
 	return edge_writer<WeightMap, CapacityMap>(w, c);
+}
+
+template <class IdxMap, class FNameMap>
+class vrtx_writer {
+public:
+	vrtx_writer(IdxMap w, FNameMap c) : idxm(w), fnm(c) {}
+	template <class Vertex>
+	void operator()(std::ostream& out, const Vertex& v) const {
+		//out << "[label=\"" << wm[e] << "\", taillabel=\"" << cm[e] << "\"]";
+		out << "[label=\"" << fnm[v] << " (" << idxm[v] << ")" << "\"]";
+	}
+private:
+	IdxMap idxm;
+	FNameMap fnm;
+};
+template <class IdxMap, class FNameMap>
+inline vrtx_writer<IdxMap, FNameMap>
+make_vrtx_writer(IdxMap w, FNameMap c) {
+	return vrtx_writer<IdxMap, FNameMap>(w, c);
 }

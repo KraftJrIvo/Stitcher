@@ -42,13 +42,14 @@ std::vector<std::string> splitString(const std::string& input, const std::string
     return tokens;
 }
 
-std::vector<std::pair<cv::Mat, cv::Rect2i>> getImagesRects(std::string path) {
+std::pair<std::vector<std::pair<cv::Mat, cv::Rect2i>>, std::vector<std::string>> getImagesRects(std::string path) {
     std::vector<std::pair<cv::Mat, cv::Rect2i>> res;
+    std::vector<std::string> fnames;
     std::filesystem::path dir(path);
 
     if (!std::filesystem::exists(dir) || !std::filesystem::is_directory(dir)) {
         std::cerr << "Invalid directory path: " << path << std::endl;
-        return res;
+        return { res, fnames };
     }
 
     int minX = INT_MAX;
@@ -72,6 +73,8 @@ std::vector<std::pair<cv::Mat, cv::Rect2i>> getImagesRects(std::string path) {
 
             if (!img.empty()) {
                 res.push_back({ img, rect });
+                auto splt = splitString(filePath, "\\/");
+                fnames.push_back(splt[splt.size() - 1]);
             }
         }
     }
@@ -80,7 +83,7 @@ std::vector<std::pair<cv::Mat, cv::Rect2i>> getImagesRects(std::string path) {
         r.second = { r.second.x - minX, r.second.y - minY, r.second.width, r.second.height };
     }
 
-    return res;
+    return { res, fnames };
 }
 
 cv::Point2f warpPoint(const cv::Point2f& point, const cv::Mat& transform)
@@ -117,7 +120,6 @@ cv::Mat composeImages(const std::vector<std::pair<cv::Mat, cv::Rect2i>>& images,
     for (int i = 0; i < images.size(); ++i) {
         if (transforms[i].empty()) continue;
         auto t = transforms[i];
-        std::cout << t << std::endl;
         auto p1 = warpPoint(cv::Point2f(images[i].second.x, images[i].second.y), t);
         auto p2 = warpPoint(cv::Point2f(images[i].second.x + images[i].second.width, images[i].second.y), t);
         auto p3 = warpPoint(cv::Point2f(images[i].second.x, images[i].second.y + images[i].second.height), t);
@@ -174,11 +176,19 @@ cv::Mat composeImages(const std::vector<std::pair<cv::Mat, cv::Rect2i>>& images,
     return canvas;
 }
 
+inline bool file_exists(const std::string& name) {
+    struct stat buffer;
+    return (stat(name.c_str(), &buffer) == 0);
+}
+
 int main() {
 
     LOFTR loftr;
 
-    auto imrecs = getImagesRects("test5");
+    std::string dir = "test5";
+    auto imginfos = getImagesRects(dir);
+    auto imrecs = imginfos.first;
+    auto fnames = imginfos.second;
 
     Graph g;
     std::map<int, std::map<int, OverlapTransform>> ots;
@@ -186,7 +196,7 @@ int main() {
     std::vector<cv::Mat> absTs(imrecs.size(), cv::Mat());
 
     for (int i = 0; i < imrecs.size(); ++i) {
-        boost::add_vertex({ i }, g);
+        boost::add_vertex({ i, fnames[i] }, g);
     }
 
     for (int i = 0; i < imrecs.size(); ++i) {
@@ -213,11 +223,32 @@ int main() {
                 cv::rectangle(msk2, mskrect2, cv::Scalar(255), -1);
                 
                 std::vector<cv::Point2f> kpts1, kpts2;
-                loftr.match(img1(mskrect1), img2(mskrect2), cv::Mat(), cv::Mat(), kpts1, kpts2);
-                for (auto& kpt : kpts1)
-                    kpt += cv::Point2f(overlap.x - rect1.x, overlap.y - rect1.y);
-                for (auto& kpt : kpts2)
-                    kpt += cv::Point2f(overlap.x - rect2.x, overlap.y - rect2.y);
+
+                if (!std::filesystem::is_directory("cache") || !std::filesystem::exists("cache")) { // Check if src folder exists
+                    std::filesystem::create_directory("cache");
+                }
+                std::string fname = "cache/" + dir + "_" + std::to_string(i) + "_" + std::to_string(j) + ".loftr";
+                if (file_exists(fname)) {
+                    std::ifstream in(fname);
+                    int npts; in >> npts;
+                    for (int i = 0; i < 2 * npts; ++i) {
+                        cv::Point2f pt; in >> pt.x >> pt.y;
+                        ((i >= npts) ? kpts2 : kpts1).push_back(pt);
+                    }
+                } else {
+                    loftr.match(img1(mskrect1), img2(mskrect2), cv::Mat(), cv::Mat(), kpts1, kpts2);
+                    std::ofstream out(fname);
+                    out << kpts1.size() << std::endl;
+                    for (auto& kpt : kpts1) {
+                        kpt += cv::Point2f(overlap.x - rect1.x, overlap.y - rect1.y);
+                        out << kpt.x << " " << kpt.y << " ";
+                    }
+                    for (auto& kpt : kpts2) {
+                        kpt += cv::Point2f(overlap.x - rect2.x, overlap.y - rect2.y);
+                        out << kpt.x << " " << kpt.y << " ";
+                    }
+
+                }
 
                 if (kpts1.size()) {
 
@@ -228,18 +259,22 @@ int main() {
                     std::cout << i << " " << j << " " << ninlers << std::endl;
 
                     //if (i == 5 || j == 5) {
-                        cv::Mat out = drawMatches(img1(mskrect1), img2(mskrect2), kpts1, kpts2, mskrect1, mskrect2, inliers);
-                        cv::imshow("m", out);
-                        cv::waitKey();
+                    //    cv::Mat out = drawMatches(img1(mskrect1), img2(mskrect2), kpts1, kpts2, mskrect1, mskrect2, inliers);
+                    //    cv::imshow("m", out);
+                    //    cv::waitKey();
                     //}
 
-                    if (ninlers >= 300/* || i == 0*/) {
+                    int minarea = std::min(rect1.area(), rect2.area());
+                    int maxarea = std::max(rect1.area(), rect2.area());
+                    bool prioritized = ((float)minarea / (float)maxarea) < 0.5f;
+
+                    if (ninlers >= 240 || prioritized) {
                         cv::Mat base = cv::Mat::eye(3, 3, CV_64F);
                         T.copyTo(base({ 0, 0, 3, 2 }));
-                        ots[i][j] = { kpts1, kpts2, inliers, i, j, ninlers, base };
-                        ots[j][i] = { kpts2, kpts1, inliers, j, i, ninlers, base.inv() };
-                        boost::add_edge(i, j, { ninlers }, g);
+                        ots[i][j] = { kpts1, kpts2, inliers, i, j, ninlers, base, prioritized };
+                        ots[j][i] = { kpts2, kpts1, inliers, j, i, ninlers, base.inv(), prioritized };
                     }
+                    boost::add_edge(i, j, { ninlers }, g);
                 }
             }
         }
@@ -252,7 +287,7 @@ int main() {
 
     std::ofstream dot("graph.dot");
     boost::write_graphviz(dot, g,
-        boost::make_label_writer(boost::get(&vert_info::idx, g)),
+        make_vrtx_writer(boost::get(&vert_info::idx, g), boost::get(&vert_info::fname, g)),
         make_edge_writer(boost::get(&edge_info::nInliers, g), boost::get(&edge_info::nInliers, g)));
 
     bool allAbsTfound = false;

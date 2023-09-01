@@ -98,14 +98,16 @@ void optimize2(const std::map<int, std::map<int, OverlapTransform>>& ots, const 
 	for (int i = 0; i < until; ++i) {
 		for (int j = i + 1; j < until; ++j) {
 			if (ots.count(i) && ots.at(i).count(j) && !Tin[i].empty() && !Tin[j].empty()) {
-				auto pts1 = ots.at(i).at(j).pts1;
-				auto pts2 = ots.at(i).at(j).pts2;
+				const auto& ot = ots.at(i).at(j);
+				auto pts1 = ot.pts1;
+				auto pts2 = ot.pts2;
+				bool prioritized = ot.prioritized;
 				for (int k = 0; k < pts1.size(); ++k) {
 					if (ots.at(i).at(j).inliers[k]) {
 						//std::cout << i << " " << j << std::endl;
 						Eigen::Vector2d pt1; pt1(0) = pts1[k].x; pt1(1) = pts1[k].y;
 						Eigen::Vector2d pt2; pt2(0) = pts2[k].x; pt2(1) = pts2[k].y;
-						p.AddResidualBlock(PointCost::Create(pt1, pt2), new ceres::HuberLoss(10.0), trs[i].data(), trs[j].data());
+						p.AddResidualBlock(PointCost::Create(pt1, pt2, (prioritized ? 100.0f : 1.0f)), new ceres::HuberLoss(10.0), trs[i].data(), trs[j].data());
 					}
 				}
 			}
