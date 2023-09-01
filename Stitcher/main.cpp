@@ -227,7 +227,7 @@ int main() {
                 if (!std::filesystem::is_directory("cache") || !std::filesystem::exists("cache")) { // Check if src folder exists
                     std::filesystem::create_directory("cache");
                 }
-                std::string fname = "cache/" + dir + "_" + std::to_string(i) + "_" + std::to_string(j) + ".loftr";
+                std::string fname = "cache/" + dir + "_" + fnames[i] + "_" + fnames[j] + ".loftr";
                 if (file_exists(fname)) {
                     std::ifstream in(fname);
                     int npts; in >> npts;
@@ -253,12 +253,12 @@ int main() {
                 if (kpts1.size()) {
 
                     std::vector<uchar> inliers;
-                    cv::Mat T = cv::estimateAffinePartial2D(kpts2, kpts1, inliers, 8, 50.0);
+                    cv::Mat T = cv::estimateAffinePartial2D(kpts2, kpts1, inliers, 8, 30.0);
                     //cv::Mat T = cv::estimateAffine2D(kpts2, kpts1, inliers);
                     int ninlers = std::count(inliers.begin(), inliers.end(), 1);
                     std::cout << i << " " << j << " " << ninlers << std::endl;
 
-                    //if (i == 5 || j == 5) {
+                    //if (i == 17 || j == 17) {
                     //    cv::Mat out = drawMatches(img1(mskrect1), img2(mskrect2), kpts1, kpts2, mskrect1, mskrect2, inliers);
                     //    cv::imshow("m", out);
                     //    cv::waitKey();
@@ -268,7 +268,7 @@ int main() {
                     int maxarea = std::max(rect1.area(), rect2.area());
                     bool prioritized = ((float)minarea / (float)maxarea) < 0.5f;
 
-                    if (ninlers >= 240 || prioritized) {
+                    if (ninlers >= 300 || (prioritized && ninlers > 150)) {
                         cv::Mat base = cv::Mat::eye(3, 3, CV_64F);
                         T.copyTo(base({ 0, 0, 3, 2 }));
                         ots[i][j] = { kpts1, kpts2, inliers, i, j, ninlers, base, prioritized };
