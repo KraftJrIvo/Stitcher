@@ -181,6 +181,13 @@ inline bool file_exists(const std::string& name) {
     return (stat(name.c_str(), &buffer) == 0);
 }
 
+float getRectSimilarity(const cv::Rect2i rect1, const cv::Rect2i rect2) {
+    int intersectionArea = (rect1 & rect2).area();
+    int unionArea = rect1.area() + rect2.area() - intersectionArea;
+    double similarity = static_cast<double>(intersectionArea) / unionArea;
+    return similarity;
+}
+
 int main() {
 
     LOFTR loftr;
@@ -194,10 +201,28 @@ int main() {
     std::map<int, std::map<int, OverlapTransform>> ots;
     std::vector<cv::Mat> absTs0(imrecs.size(), cv::Mat());
     std::vector<cv::Mat> absTs(imrecs.size(), cv::Mat());
-
+    
+    std::vector<int> imrecsUnique(imrecs.size(), true);
     for (int i = 0; i < imrecs.size(); ++i) {
-        boost::add_vertex({ i, fnames[i] }, g);
+        auto rect1 = imrecs[i].second;
+        if (!imrecsUnique[i]) continue;
+        for (int j = i + 1; j < imrecs.size(); ++j) {
+            auto rect2 = imrecs[j].second;
+            float sim = getRectSimilarity(rect1, rect2);
+            if (sim > 0.8) imrecsUnique[j] = false;
+        }
     }
+    std::pair<std::vector<std::pair<cv::Mat, cv::Rect2i>>, std::vector<std::string>> filteredImginfos;
+    for (int i = 0; i < imrecs.size(); ++i) {
+        if (imrecsUnique[i]) {
+            boost::add_vertex({ (int)filteredImginfos.first.size(), fnames[i]}, g);
+            filteredImginfos.first.push_back(imginfos.first[i]);
+            filteredImginfos.second.push_back(imginfos.second[i]);
+        }
+    }
+    imginfos = filteredImginfos;
+    imrecs = filteredImginfos.first;
+    fnames = filteredImginfos.second;
 
     for (int i = 0; i < imrecs.size(); ++i) {
         auto rect1 = imrecs[i].second;
@@ -258,7 +283,7 @@ int main() {
                     int ninlers = std::count(inliers.begin(), inliers.end(), 1);
                     std::cout << i << " " << j << " " << ninlers << std::endl;
 
-                    //if (i == 17 || j == 17) {
+                    //if (i == 8 || j == 8) {
                     //    cv::Mat out = drawMatches(img1(mskrect1), img2(mskrect2), kpts1, kpts2, mskrect1, mskrect2, inliers);
                     //    cv::imshow("m", out);
                     //    cv::waitKey();
