@@ -9,10 +9,11 @@
 
 struct OverlapTransform {
 	std::vector<cv::Point2f> pts1, pts2;
+	cv::Rect2i rect1, rect2;
 	std::vector<uchar> inliers;
 	int parent, child, nInlers;
 	cv::Mat relT;
-	bool prioritized;
+	int prioritizedIdx;
 };
 
 typedef struct vert_info {

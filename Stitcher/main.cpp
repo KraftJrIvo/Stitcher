@@ -108,7 +108,74 @@ cv::Mat drawMatches(cv::Mat img1, cv::Mat img2, const std::vector<cv::Point2f>& 
     return img;
 }
 
-cv::Mat composeImages(const std::vector<std::pair<cv::Mat, cv::Rect2i>>& images, const std::vector<cv::Mat>& transforms, bool vis = false)
+cv::Mat drawRects(const std::vector<std::pair<cv::Mat, cv::Rect2i>>& imrects) {
+    int maxX = -INFINITY;
+    int maxY = -INFINITY;
+    int minX = INFINITY;
+    int minY = INFINITY;
+    for (int i = 0; i < imrects.size(); ++i) {
+        auto& img = imrects[i].first;
+        auto& rect = imrects[i].second;
+        maxX = std::max(maxX, rect.x + rect.width);
+        maxY = std::max(maxY, rect.y + rect.height);
+        minX = std::min(minX, rect.x);
+        minY = std::min(minY, rect.y);
+    }
+    cv::Mat res(maxY - minY, maxX - minX, CV_8UC3, cv::Scalar(0, 0, 0));
+    for (int i = 0; i < imrects.size(); ++i) {
+        auto& img = imrects[i].first;
+        auto& rect = imrects[i].second;
+        for (int x = rect.x; x < rect.x + rect.width; ++x) {
+            for (int y = rect.y; y < rect.y + rect.height; ++y) {
+                bool edge = x == rect.x || x == (rect.x + rect.width - 1) || y == rect.y || y == (rect.y + rect.height - 1);
+                if (edge)
+                    res.at<cv::Vec3b>(y, x) = cv::Vec3b(255, 255, 255);
+                else 
+                    res.at<cv::Vec3b>(y, x) += cv::Vec3b(20, 20, 20);
+            }
+        }
+    }
+    return res;
+}
+
+cv::Rect findLargestInscribedRectangle(const cv::Mat& inputImage)
+{
+    cv::Mat binaryImage;
+    cv::cvtColor(inputImage, binaryImage, cv::COLOR_BGR2GRAY);
+    cv::threshold(binaryImage, binaryImage, 1, 255, cv::THRESH_BINARY);
+    std::vector<std::vector<cv::Point>> contours;
+    cv::findContours(binaryImage, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+    double largestArea = 0;
+    cv::Rect largestRectangle;
+    for (const auto& contour : contours)
+    {
+        double area = cv::contourArea(contour);
+        if (area > largestArea)
+        {
+            largestArea = area;
+            largestRectangle = cv::boundingRect(contour);
+        }
+    }
+
+    return largestRectangle;
+}
+
+cv::Mat cropImage(const cv::Mat& inputImage, int frameWidth)
+{
+    int imageWidth = inputImage.cols;
+    int imageHeight = inputImage.rows;
+
+    int croppedWidth = imageWidth - (2 * frameWidth);
+    int croppedHeight = imageHeight - (2 * frameWidth);
+
+    cv::Rect cropRegion(frameWidth, frameWidth, croppedWidth, croppedHeight);
+
+    return inputImage(cropRegion).clone();
+}
+
+
+cv::Mat composeImages(const std::vector<std::pair<cv::Mat, cv::Rect2i>>& images, const std::vector<cv::Mat>& transforms, 
+    std::vector<cv::Mat>* masks = nullptr, bool alpha = true, bool vis = false)
 {
     // Find the maximum width and height among all images
     int maxWidth = 0;
@@ -132,9 +199,15 @@ cv::Mat composeImages(const std::vector<std::pair<cv::Mat, cv::Rect2i>>& images,
     int w = ceil(maxX - minX);
     int h = ceil(maxY - minY);
 
+    std::map<int, bool> banned;
+    std::vector<std::pair<long long, int>> areasAndIds;
+
     cv::Mat maskCanvas(h, w, CV_8UC1, cv::Scalar(0));
     for (size_t i = 0; i < images.size(); ++i) {
-        if (transforms[i].empty()) continue;
+        if (transforms[i].empty()) {
+            areasAndIds.push_back({ 0, -1 });
+            continue;
+        }
         cv::Mat t = transforms[i]({ 0, 0, 3, 2 }).clone();
         t.at<double>(0, 2) -= minX;
         t.at<double>(1, 2) -= minY;
@@ -143,27 +216,51 @@ cv::Mat composeImages(const std::vector<std::pair<cv::Mat, cv::Rect2i>>& images,
         layer *= 1000000;
         layer /= 255;
         cv::Mat warpedLayer;
+        if (masks) {
+            if (masks->at(i).empty()) {
+                banned[i] = true;
+                areasAndIds.push_back({ 0, -1 });
+                continue;
+            }
+            cv::Mat maskedLayer = cv::Mat(layer.rows, layer.cols, CV_8UC1, cv::Scalar(0));
+            layer.copyTo(maskedLayer, masks->at(i));
+            layer = maskedLayer;
+            areasAndIds.push_back({ (long long)(-cv::sum(layer)[0]), i });
+        }
         cv::warpAffine(layer, warpedLayer, t, maskCanvas.size());
         cv::add(warpedLayer, maskCanvas, maskCanvas);
     }
 
+    if (masks) std::sort(areasAndIds.begin(), areasAndIds.end());
+
     cv::Mat canvas(h, w, CV_8UC3, cv::Scalar(0, 0, 0));
     for (size_t i = 0; i < images.size(); ++i) {
-        if (transforms[i].empty()) continue;
+        int id = masks ? areasAndIds[i].second : i;
+        if (id == -1 || transforms[id].empty() || banned.count(id)) continue;
         cv::Mat warpedImage;
-        cv::Mat t = transforms[i]({ 0, 0, 3, 2 }).clone();
+        cv::Mat t = transforms[id]({ 0, 0, 3, 2 }).clone();
         t.at<double>(0, 2) -= minX;
         t.at<double>(1, 2) -= minY;
-        cv::warpAffine(images[i].first, warpedImage, t, canvas.size());
+        cv::Mat img = images[id].first;
+        if (masks) {
+            cv::Mat maskedImg = cv::Mat(img.rows, img.cols, CV_8UC1, cv::Scalar(0));
+            img.copyTo(maskedImg, masks->at(id));
+            img = maskedImg;
+        }
+        cv::warpAffine(img, warpedImage, t, canvas.size(), cv::INTER_NEAREST);
         for (int x = 0; x < warpedImage.cols; ++x) {
             for (int y = 0; y < warpedImage.rows; ++y) {
                 auto rgb = warpedImage.at<cv::Vec3b>(y, x);
                 if (rgb[0] > 0 || rgb[1] > 0 || rgb[2] > 0) {
-                    float coeff = 1.0f / float(maskCanvas.at<uchar>(y, x));
-                    uchar r = floor(float(rgb[0]) * coeff);
-                    uchar g = floor(float(rgb[1]) * coeff);
-                    uchar b = floor(float(rgb[2]) * coeff);
-                    canvas.at<cv::Vec3b>(y, x) += cv::Vec3b(r, g, b);
+                    if (masks && !alpha) {
+                        canvas.at<cv::Vec3b>(y, x) = rgb;
+                    } else {
+                        float coeff = 1.0f / float(maskCanvas.at<uchar>(y, x));
+                        uchar r = floor(float(rgb[0]) * coeff);
+                        uchar g = floor(float(rgb[1]) * coeff);
+                        uchar b = floor(float(rgb[2]) * coeff);
+                        canvas.at<cv::Vec3b>(y, x) += cv::Vec3b(r, g, b);
+                    }
                 }
             }
         }
@@ -173,7 +270,8 @@ cv::Mat composeImages(const std::vector<std::pair<cv::Mat, cv::Rect2i>>& images,
         }
     }
 
-    return canvas;
+    auto inrect = findLargestInscribedRectangle(canvas);
+    return canvas(inrect);
 }
 
 inline bool file_exists(const std::string& name) {
@@ -201,6 +299,8 @@ int main() {
     std::map<int, std::map<int, OverlapTransform>> ots;
     std::vector<cv::Mat> absTs0(imrecs.size(), cv::Mat());
     std::vector<cv::Mat> absTs(imrecs.size(), cv::Mat());
+
+    cv::imwrite("rects1.png", drawRects(imrecs));
     
     std::vector<int> imrecsUnique(imrecs.size(), true);
     for (int i = 0; i < imrecs.size(); ++i) {
@@ -223,6 +323,8 @@ int main() {
     imginfos = filteredImginfos;
     imrecs = filteredImginfos.first;
     fnames = filteredImginfos.second;
+    cv::imwrite("rects2.png", drawRects(imrecs));
+
 
     for (int i = 0; i < imrecs.size(); ++i) {
         auto rect1 = imrecs[i].second;
@@ -291,13 +393,15 @@ int main() {
 
                     int minarea = std::min(rect1.area(), rect2.area());
                     int maxarea = std::max(rect1.area(), rect2.area());
+                    int maxAreaIdx = (rect1.area() > rect2.area()) ? i : j;
                     bool prioritized = ((float)minarea / (float)maxarea) < 0.5f;
+                    int prioritizedIdx = prioritized ? maxAreaIdx : -1;
 
                     if (ninlers >= 300 || (prioritized && ninlers > 150)) {
                         cv::Mat base = cv::Mat::eye(3, 3, CV_64F);
                         T.copyTo(base({ 0, 0, 3, 2 }));
-                        ots[i][j] = { kpts1, kpts2, inliers, i, j, ninlers, base, prioritized };
-                        ots[j][i] = { kpts2, kpts1, inliers, j, i, ninlers, base.inv(), prioritized };
+                        ots[i][j] = { kpts1, kpts2, rect1, rect2, inliers, i, j, ninlers, base, prioritizedIdx };
+                        ots[j][i] = { kpts2, kpts1, rect2, rect1, inliers, j, i, ninlers, base.inv(), prioritizedIdx };
                     }
                     boost::add_edge(i, j, { ninlers }, g);
                 }
@@ -377,10 +481,15 @@ int main() {
     composed = composeImages(imrecs, absTs2);
     cv::imwrite("res2.png", composed);
 
+    std::vector<cv::Mat> masks;
     std::vector<cv::Mat> absTs3(imrecs.size(), cv::Mat());
-    optimize2(ots, absTs, absTs3);
-    composed = composeImages(imrecs, absTs3, true);
+    optimize2(ots, absTs, absTs3, -1, &masks);
+    composed = composeImages(imrecs, absTs3);
     cv::imwrite("res3.png", composed);
+    composed = composeImages(imrecs, absTs3, &masks, true);
+    cv::imwrite("res4.png", composed);
+    composed = composeImages(imrecs, absTs3, &masks, false);
+    cv::imwrite("res5.png", composed);
 
 	return 0;
 }

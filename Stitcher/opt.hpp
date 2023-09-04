@@ -7,7 +7,7 @@
 
 cv::Mat composeAffine(const Eigen::Matrix<double, 6, 1>& vals);
 void optimize1(const std::map<int, std::map<int, OverlapTransform>>& ots, const std::vector<cv::Mat>& Tin, std::vector<cv::Mat>& Tout, int until = -1);
-void optimize2(const std::map<int, std::map<int, OverlapTransform>>& ots, const std::vector<cv::Mat>& Tin, std::vector<cv::Mat>& Tout, int until = -1);
+void optimize2(const std::map<int, std::map<int, OverlapTransform>>& ots, const std::vector<cv::Mat>& Tin, std::vector<cv::Mat>& Tout, int until = -1, std::vector<cv::Mat>* masks = nullptr);
 
 class AffineCost {
 public:

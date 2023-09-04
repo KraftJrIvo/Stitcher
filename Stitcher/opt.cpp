@@ -74,7 +74,8 @@ void optimize1(const std::map<int, std::map<int, OverlapTransform>>& ots, const 
 	}
 }
 
-void optimize2(const std::map<int, std::map<int, OverlapTransform>>& ots, const std::vector<cv::Mat>& Tin, std::vector<cv::Mat>& Tout, int until) {
+void optimize2(const std::map<int, std::map<int, OverlapTransform>>& ots, const std::vector<cv::Mat>& Tin, std::vector<cv::Mat>& Tout, int until, 
+	std::vector<cv::Mat>* masks) {
 
 	if (until == -1) until = Tin.size();
 
@@ -95,21 +96,35 @@ void optimize2(const std::map<int, std::map<int, OverlapTransform>>& ots, const 
 		}
 	}
 
+	std::map<int, bool> prioritizedVerts;
+	std::map<int, cv::Rect2i> rects;
+	std::map<int, std::map<int, std::vector<ceres::ResidualBlockId>>> edges;
+	std::map<int, std::map<int, std::vector<int>>> edgePtIds;
+
 	for (int i = 0; i < until; ++i) {
 		for (int j = i + 1; j < until; ++j) {
 			if (ots.count(i) && ots.at(i).count(j) && !Tin[i].empty() && !Tin[j].empty()) {
 				const auto& ot = ots.at(i).at(j);
 				auto pts1 = ot.pts1;
 				auto pts2 = ot.pts2;
-				bool prioritized = ot.prioritized;
+				bool prioritized = ot.prioritizedIdx > -1;
 				for (int k = 0; k < pts1.size(); ++k) {
-					if (ots.at(i).at(j).inliers[k]) {
-						//std::cout << i << " " << j << std::endl;
+					if (ot.inliers[k]) {
 						Eigen::Vector2d pt1; pt1(0) = pts1[k].x; pt1(1) = pts1[k].y;
 						Eigen::Vector2d pt2; pt2(0) = pts2[k].x; pt2(1) = pts2[k].y;
-						p.AddResidualBlock(PointCost::Create(pt1, pt2, (prioritized ? 100.0f : 1.0f)), new ceres::HuberLoss(10.0), trs[i].data(), trs[j].data());
+						float weight = prioritized ? 100.0f : 1.0f;
+						auto huber = new ceres::HuberLoss(10.0);		
+						if (!edges.count(i) || !edges[i].count(j)) {
+							edges[i][j] = {};
+							edgePtIds[i][j] = {};
+						}
+						edges[i][j].push_back(p.AddResidualBlock(PointCost::Create(pt1, pt2, weight), huber, trs[i].data(), trs[j].data()));
+						edgePtIds[i][j].push_back(k);
+						if (prioritized)
+							prioritizedVerts[ot.prioritizedIdx] = true;
 					}
 				}
+				rects[i] = ot.rect1;
 			}
 		}
 	}
@@ -124,6 +139,41 @@ void optimize2(const std::map<int, std::map<int, OverlapTransform>>& ots, const 
 	for (int i = 0; i < Tin.size(); ++i) {
 		if (!Tin[i].empty() && i < until) {
 			Tout[i] = composeAffine(trs[i]);
+		}
+	}
+
+	if (masks) {
+		Eigen::Vector4d residual;
+		for (int i = 0; i < Tin.size(); ++i) {
+			const auto T = Tin[i];
+			if (!T.empty()) {
+				const auto& rect = rects[i];
+				if (!prioritizedVerts.count(i)) {
+					cv::Mat mask = cv::Mat(rect.height, rect.width, CV_8UC1, cv::Scalar(0));
+					for (int j = i + 1; j < Tin.size(); ++j) {
+						if (ots.count(i) && ots.at(i).count(j) && !Tin[i].empty() && !Tin[j].empty()) {
+							auto edgeIds = edges[i][j];
+							std::vector<cv::Point2i> goodPoints;
+							for (int k = 0; k < edgeIds.size(); ++k) {
+								double cost; p.EvaluateResidualBlock(edgeIds[k], false, &cost, residual.data(), nullptr);
+								cost = abs(residual[0] + residual[1]);
+								if (ots.at(i).at(j).prioritizedIdx != -1)
+									cost /= 100.0f;
+								if (cost < 1.5) {
+									auto& pts = (ots.at(i).at(j).parent == i) ? ots.at(i).at(j).pts1 : ots.at(i).at(j).pts2;
+									goodPoints.push_back({ int(pts[k].x), int(pts[k].y) });
+								}
+							}
+							std::vector<cv::Point2i> hull;
+							cv::convexHull(goodPoints, hull);
+							cv::fillConvexPoly(mask, hull, cv::Scalar(255));
+						}
+					}
+					masks->push_back(mask);
+				} else {
+					masks->push_back(cv::Mat(rect.height, rect.width, CV_8UC1, cv::Scalar(255)));
+				}
+			}
 		}
 	}
 }
