@@ -1,3 +1,4 @@
+#define NOMINMAX
 #include "opt.hpp"
 
 cv::Mat composeAffine(const Eigen::Matrix<double, 6, 1>& vals) {
@@ -117,9 +118,13 @@ void optimize2(const std::map<int, std::map<int, OverlapTransform>>& ots, const 
 						if (!edges.count(i) || !edges[i].count(j)) {
 							edges[i][j] = {};
 							edgePtIds[i][j] = {};
+							edges[j][i] = {};
+							edgePtIds[j][i] = {};
 						}
 						edges[i][j].push_back(p.AddResidualBlock(PointCost::Create(pt1, pt2, weight), huber, trs[i].data(), trs[j].data()));
 						edgePtIds[i][j].push_back(k);
+						edges[j][i].push_back(edges[i][j][edges[i][j].size() - 1]);
+						edgePtIds[j][i].push_back(k);
 						if (prioritized)
 							prioritizedVerts[ot.prioritizedIdx] = true;
 					}
@@ -146,33 +151,40 @@ void optimize2(const std::map<int, std::map<int, OverlapTransform>>& ots, const 
 		Eigen::Vector4d residual;
 		for (int i = 0; i < Tin.size(); ++i) {
 			const auto T = Tin[i];
-			if (!T.empty()) {
-				const auto& rect = rects[i];
-				if (!prioritizedVerts.count(i)) {
-					cv::Mat mask = cv::Mat(rect.height, rect.width, CV_8UC1, cv::Scalar(0));
-					for (int j = i + 1; j < Tin.size(); ++j) {
-						if (ots.count(i) && ots.at(i).count(j) && !Tin[i].empty() && !Tin[j].empty()) {
-							auto edgeIds = edges[i][j];
-							std::vector<cv::Point2i> goodPoints;
-							for (int k = 0; k < edgeIds.size(); ++k) {
-								double cost; p.EvaluateResidualBlock(edgeIds[k], false, &cost, residual.data(), nullptr);
-								cost = abs(residual[0] + residual[1]);
-								if (ots.at(i).at(j).prioritizedIdx != -1)
-									cost /= 100.0f;
-								if (cost < 1.5) {
-									auto& pts = (ots.at(i).at(j).parent == i) ? ots.at(i).at(j).pts1 : ots.at(i).at(j).pts2;
-									goodPoints.push_back({ int(pts[k].x), int(pts[k].y) });
-								}
+			const auto& rect = rects[i];
+			if (!T.empty() && !prioritizedVerts.count(i)) {
+				cv::Mat mask = cv::Mat(rect.height, rect.width, CV_8UC1, cv::Scalar(0));
+				for (int j = 0; j < Tin.size(); ++j) {
+					if (j == i) continue;
+					if (ots.count(i) && ots.at(i).count(j) && !Tin[i].empty() && !Tin[j].empty()) {
+						auto edgeIds = edges[i][j];
+						std::vector<cv::Point2i> goodPoints;
+						int minX = INT_MAX;
+						int maxX = -INT_MAX;
+						for (int k = 0; k < edgeIds.size(); ++k) {
+							double cost; p.EvaluateResidualBlock(edgeIds[k], false, &cost, residual.data(), nullptr);
+							cost = abs(residual[0] + residual[1]);
+							if (ots.at(i).at(j).prioritizedIdx != -1)
+								cost /= 100.0f;
+							if (cost < 1.5 /*&& (ots.at(i).at(j).prioritizedIdx != -1 || prioritizedVerts.size() == 0)*/) {
+								auto& pts = (ots.at(i).at(j).parent == i) ? ots.at(i).at(j).pts1 : ots.at(i).at(j).pts2;
+								goodPoints.push_back({ int(pts[k].x), int(pts[k].y) });
+								minX = std::min(minX, int(pts[k].x));
+								maxX = std::max(maxX, int(pts[k].x));
 							}
+						}
+						if (goodPoints.size() > 3) {
+							//goodPoints.push_back({ minX, rect.y + rect.height });
+							//goodPoints.push_back({ maxX, rect.y + rect.height });
 							std::vector<cv::Point2i> hull;
 							cv::convexHull(goodPoints, hull);
 							cv::fillConvexPoly(mask, hull, cv::Scalar(255));
 						}
 					}
-					masks->push_back(mask);
-				} else {
-					masks->push_back(cv::Mat(rect.height, rect.width, CV_8UC1, cv::Scalar(255)));
 				}
+				masks->push_back(mask);
+			} else {
+				masks->push_back(cv::Mat(rect.height, rect.width, CV_8UC1, cv::Scalar(255)));
 			}
 		}
 	}

@@ -201,10 +201,12 @@ cv::Mat composeImages(const std::vector<std::pair<cv::Mat, cv::Rect2i>>& images,
 
     std::map<int, bool> banned;
     std::vector<std::pair<long long, int>> areasAndIds;
+    std::vector<cv::Mat> maskedLayers;
 
     cv::Mat maskCanvas(h, w, CV_8UC1, cv::Scalar(0));
     for (size_t i = 0; i < images.size(); ++i) {
         if (transforms[i].empty()) {
+            maskedLayers.push_back(cv::Mat());
             areasAndIds.push_back({ 0, -1 });
             continue;
         }
@@ -216,22 +218,33 @@ cv::Mat composeImages(const std::vector<std::pair<cv::Mat, cv::Rect2i>>& images,
         layer *= 1000000;
         layer /= 255;
         cv::Mat warpedLayer;
+        cv::Mat maskedLayer;
         if (masks) {
             if (masks->at(i).empty()) {
                 banned[i] = true;
                 areasAndIds.push_back({ 0, -1 });
                 continue;
             }
-            cv::Mat maskedLayer = cv::Mat(layer.rows, layer.cols, CV_8UC1, cv::Scalar(0));
+            maskedLayer = cv::Mat(layer.rows, layer.cols, CV_8UC1, cv::Scalar(0));
             layer.copyTo(maskedLayer, masks->at(i));
-            layer = maskedLayer;
             areasAndIds.push_back({ (long long)(-cv::sum(layer)[0]), i });
         }
         cv::warpAffine(layer, warpedLayer, t, maskCanvas.size());
-        cv::add(warpedLayer, maskCanvas, maskCanvas);
+        if (masks) {
+            cv::Mat warpedMask; cv::warpAffine(maskedLayer, warpedMask, t, maskCanvas.size());
+            for (int x = 0; x < warpedMask.cols; ++x) {
+                for (int y = 0; y < warpedMask.rows; ++y) {
+                    bool filled = (maskCanvas.at<uchar>(y, x) > 0);
+                    maskCanvas.at<uchar>(y, x) += filled ? warpedMask.at<uchar>(y, x) : warpedLayer.at<uchar>(y, x);
+                }
+            }
+            maskedLayers.push_back(warpedMask);
+        } else {
+            cv::add(warpedLayer, maskCanvas, maskCanvas);
+        }
     }
 
-    if (masks) std::sort(areasAndIds.begin(), areasAndIds.end());
+    if (masks && !alpha) std::sort(areasAndIds.begin(), areasAndIds.end());
 
     cv::Mat canvas(h, w, CV_8UC3, cv::Scalar(0, 0, 0));
     for (size_t i = 0; i < images.size(); ++i) {
@@ -242,20 +255,24 @@ cv::Mat composeImages(const std::vector<std::pair<cv::Mat, cv::Rect2i>>& images,
         t.at<double>(0, 2) -= minX;
         t.at<double>(1, 2) -= minY;
         cv::Mat img = images[id].first;
-        if (masks) {
-            cv::Mat maskedImg = cv::Mat(img.rows, img.cols, CV_8UC1, cv::Scalar(0));
-            img.copyTo(maskedImg, masks->at(id));
-            img = maskedImg;
-        }
         cv::warpAffine(img, warpedImage, t, canvas.size(), cv::INTER_NEAREST);
+        
+        cv::Mat maskedWarpedImage;
+        if (masks) {
+            maskedWarpedImage = cv::Mat(warpedImage.rows, warpedImage.cols, CV_8UC1, cv::Scalar(0));
+            warpedImage.copyTo(maskedWarpedImage, maskedLayers[i]);
+        }
+
         for (int x = 0; x < warpedImage.cols; ++x) {
             for (int y = 0; y < warpedImage.rows; ++y) {
-                auto rgb = warpedImage.at<cv::Vec3b>(y, x);
+                bool filled = !masks || (canvas.at<cv::Vec3b>(y, x)[0] > 0 || canvas.at<cv::Vec3b>(y, x)[1] > 0 || canvas.at<cv::Vec3b>(y, x)[2] > 0);
+                auto rgb = (filled && masks) ? maskedWarpedImage.at<cv::Vec3b>(y, x) : warpedImage.at<cv::Vec3b>(y, x);
+                
                 if (rgb[0] > 0 || rgb[1] > 0 || rgb[2] > 0) {
                     if (masks && !alpha) {
                         canvas.at<cv::Vec3b>(y, x) = rgb;
                     } else {
-                        float coeff = 1.0f / float(maskCanvas.at<uchar>(y, x));
+                        float coeff = (1.0f / float(maskCanvas.at<uchar>(y, x)));
                         uchar r = floor(float(rgb[0]) * coeff);
                         uchar g = floor(float(rgb[1]) * coeff);
                         uchar b = floor(float(rgb[2]) * coeff);
@@ -271,7 +288,7 @@ cv::Mat composeImages(const std::vector<std::pair<cv::Mat, cv::Rect2i>>& images,
     }
 
     auto inrect = findLargestInscribedRectangle(canvas);
-    return canvas(inrect);
+    return canvas;// (inrect);
 }
 
 inline bool file_exists(const std::string& name) {
@@ -286,11 +303,17 @@ float getRectSimilarity(const cv::Rect2i rect1, const cv::Rect2i rect2) {
     return similarity;
 }
 
-int main() {
-
+int main(int argc, char* argv[]) {
     LOFTR loftr;
 
-    std::string dir = "test5";
+    if (argc < 4) {
+        std::cout << "please provide arguments: <input folder> <output file> <cache folder>";
+        return 0;
+    }
+    std::string dir = argv[1];
+    std::string outfile = argv[2];
+    std::string cashdir = argv[3];
+
     auto imginfos = getImagesRects(dir);
     auto imrecs = imginfos.first;
     auto fnames = imginfos.second;
@@ -300,7 +323,7 @@ int main() {
     std::vector<cv::Mat> absTs0(imrecs.size(), cv::Mat());
     std::vector<cv::Mat> absTs(imrecs.size(), cv::Mat());
 
-    cv::imwrite("rects1.png", drawRects(imrecs));
+    //cv::imwrite("rects1.png", drawRects(imrecs));
     
     std::vector<int> imrecsUnique(imrecs.size(), true);
     for (int i = 0; i < imrecs.size(); ++i) {
@@ -320,11 +343,18 @@ int main() {
             filteredImginfos.second.push_back(imginfos.second[i]);
         }
     }
-    imginfos = filteredImginfos;
-    imrecs = filteredImginfos.first;
-    fnames = filteredImginfos.second;
-    cv::imwrite("rects2.png", drawRects(imrecs));
-
+    if (filteredImginfos.first.size() > 1) {
+        imginfos = filteredImginfos;
+        imrecs = filteredImginfos.first;
+        fnames = filteredImginfos.second;
+        //cv::imwrite("rects2.png", drawRects(imrecs));
+    } else if (imrecs.size() == 1) {
+        cv::imwrite(outfile, imrecs[0].first);
+        return 0;
+    } else if (imrecs.size() == 0) {
+        std::cout << "ERROR: empty directory given";
+        return 0;
+    }
 
     for (int i = 0; i < imrecs.size(); ++i) {
         auto rect1 = imrecs[i].second;
@@ -354,7 +384,8 @@ int main() {
                 if (!std::filesystem::is_directory("cache") || !std::filesystem::exists("cache")) { // Check if src folder exists
                     std::filesystem::create_directory("cache");
                 }
-                std::string fname = "cache/" + dir + "_" + fnames[i] + "_" + fnames[j] + ".loftr";
+                auto spltdir = splitString(dir, "\\/");
+                std::string fname = cashdir + "/" + spltdir[spltdir.size() - 1] + "_" + fnames[i] + "_" + fnames[j] + ".loftr";
                 if (file_exists(fname)) {
                     std::ifstream in(fname);
                     int npts; in >> npts;
@@ -471,25 +502,26 @@ int main() {
     }
 
     auto composed = composeImages(imrecs, absTs0);
-    cv::imwrite("res0.png", composed);
+    //cv::imwrite("res0.png", composed);
 
     composed = composeImages(imrecs, absTs);
-    cv::imwrite("res1.png", composed);
+    //cv::imwrite("res1.png", composed);
 
     std::vector<cv::Mat> absTs2(imrecs.size(), cv::Mat());
     optimize1(ots, absTs, absTs2);
     composed = composeImages(imrecs, absTs2);
-    cv::imwrite("res2.png", composed);
+    //cv::imwrite("res2.png", composed);
 
     std::vector<cv::Mat> masks;
     std::vector<cv::Mat> absTs3(imrecs.size(), cv::Mat());
     optimize2(ots, absTs, absTs3, -1, &masks);
     composed = composeImages(imrecs, absTs3);
-    cv::imwrite("res3.png", composed);
+    //cv::imwrite("res3.png", composed);
     composed = composeImages(imrecs, absTs3, &masks, true);
-    cv::imwrite("res4.png", composed);
+    cv::imwrite(outfile, composed);
+    //cv::imwrite("res4.png", composed);
     composed = composeImages(imrecs, absTs3, &masks, false);
-    cv::imwrite("res5.png", composed);
+    //cv::imwrite("res5.png", composed);
 
 	return 0;
 }
