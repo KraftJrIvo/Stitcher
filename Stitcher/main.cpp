@@ -42,7 +42,7 @@ std::vector<std::string> splitString(const std::string& input, const std::string
     return tokens;
 }
 
-std::pair<std::vector<std::pair<cv::Mat, cv::Rect2i>>, std::vector<std::string>> getImagesRects(std::string path) {
+std::pair<std::vector<std::pair<cv::Mat, cv::Rect2i>>, std::vector<std::string>> getImagesRects(std::string path, int scale) {
     std::vector<std::pair<cv::Mat, cv::Rect2i>> res;
     std::vector<std::string> fnames;
     std::filesystem::path dir(path);
@@ -59,16 +59,16 @@ std::pair<std::vector<std::pair<cv::Mat, cv::Rect2i>>, std::vector<std::string>>
         if (entry.is_regular_file()) {
             std::string filePath = entry.path().string();
             cv::Mat img = cv::imread(filePath, cv::IMREAD_COLOR);
-            if (path.find("test5") != std::string::npos)
-                cv::resize(img, img, {img.cols / 4, img.rows / 4});
+            if (scale != 1)
+                cv::resize(img, img, {img.cols / scale, img.rows / scale });
             auto split = splitString(filePath, "\\/._");
             int x = std::stoi(split[split.size() - 3]);
             int y = std::stoi(split[split.size() - 2]);
             minX = std::min(minX, x);
             minY = std::min(minY, y);
             cv::Rect2i rect = { x, y, img.cols, img.rows };
-            if (path.find("test5") != std::string::npos) {
-                rect.x /= 4; rect.y /= 4;
+            if (scale != 1) {
+                rect.x /= scale; rect.y /= scale;
             }
 
             if (!img.empty()) {
@@ -307,14 +307,15 @@ int main(int argc, char* argv[]) {
     LOFTR loftr;
 
     if (argc < 4) {
-        std::cout << "please provide arguments: <input folder> <output file> <cache folder>";
+        std::cout << "please provide arguments: <input folder> <output file> <cache folder> <scale (optional)>";
         return 0;
     }
     std::string dir = argv[1];
     std::string outfile = argv[2];
     std::string cashdir = argv[3];
+    int scale = (argc > 4) ? std::stoi(argv[4]) : 1;
 
-    auto imginfos = getImagesRects(dir);
+    auto imginfos = getImagesRects(dir, scale);
     auto imrecs = imginfos.first;
     auto fnames = imginfos.second;
 
