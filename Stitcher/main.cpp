@@ -439,11 +439,13 @@ int main(int argc, char* argv[]) {
                 }
             }
         }
-        if (i == 0) {
-            absTs[i] = cv::Mat::eye(3, 3, CV_64F);
-            absTs[i].at<double>(0, 2) = rect1.x;
-            absTs[i].at<double>(1, 2) = rect1.y;
-        }
+    }
+    
+    if (ots.size()) {
+        auto idx = ots.begin()->first;
+        absTs[idx] = cv::Mat::eye(3, 3, CV_64F);
+        absTs[idx].at<double>(0, 2) = imrecs[idx].second.x;
+        absTs[idx].at<double>(1, 2) = imrecs[idx].second.y;
     }
 
     std::ofstream dot("graph.dot");
