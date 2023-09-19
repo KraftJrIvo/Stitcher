@@ -447,12 +447,15 @@ int main(int argc, char* argv[]) {
         absTs[idx] = cv::Mat::eye(3, 3, CV_64F);
         absTs[idx].at<double>(0, 2) = imrecs[idx].second.x;
         absTs[idx].at<double>(1, 2) = imrecs[idx].second.y;
+    } else {
+        std::cout << "ERROR: too few matches";
+        return 0;
     }
 
-    std::ofstream dot("graph.dot");
-    boost::write_graphviz(dot, g,
-        make_vrtx_writer(boost::get(&vert_info::idx, g), boost::get(&vert_info::fname, g)),
-        make_edge_writer(boost::get(&edge_info::nInliers, g), boost::get(&edge_info::nInliers, g)));
+    //std::ofstream dot("graph.dot");
+    //boost::write_graphviz(dot, g,
+    //    make_vrtx_writer(boost::get(&vert_info::idx, g), boost::get(&vert_info::fname, g)),
+    //    make_edge_writer(boost::get(&edge_info::nInliers, g), boost::get(&edge_info::nInliers, g)));
 
     bool allAbsTfound = false;
     bool added = true;
