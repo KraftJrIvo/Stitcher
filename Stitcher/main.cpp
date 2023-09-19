@@ -519,12 +519,12 @@ int main(int argc, char* argv[]) {
     std::vector<cv::Mat> masks;
     std::vector<cv::Mat> absTs3(imrecs.size(), cv::Mat());
     optimize2(ots, absTs, absTs3, -1, &masks);
-    composed = composeImages(imrecs, absTs3);
+    //composed = composeImages(imrecs, absTs3);
     //cv::imwrite("res3.png", composed);
     composed = composeImages(imrecs, absTs3, &masks, true);
     cv::imwrite(outfile, composed);
     //cv::imwrite("res4.png", composed);
-    composed = composeImages(imrecs, absTs3, &masks, false);
+    //composed = composeImages(imrecs, absTs3, &masks, false);
     //cv::imwrite("res5.png", composed);
 
 	return 0;
