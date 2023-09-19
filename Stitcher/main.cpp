@@ -222,6 +222,7 @@ cv::Mat composeImages(const std::vector<std::pair<cv::Mat, cv::Rect2i>>& images,
         if (masks) {
             if (masks->at(i).empty()) {
                 banned[i] = true;
+                maskedLayers.push_back(cv::Mat());
                 areasAndIds.push_back({ 0, -1 });
                 continue;
             }
